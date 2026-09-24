@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
-// Initialize S3Client with Cloudflare R2 endpoint
 function getR2Client() {
   const accountId = process.env.R2_ACCOUNT_ID;
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
@@ -21,20 +20,60 @@ function getR2Client() {
   });
 }
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const {
-      senderName,
-      tableNumber,
-      note,
-      mediaType, // 'photo' | 'video'
-      base64Data,
-      fileName,
-      hasConsent,
-    } = body;
+    const contentType = req.headers.get('content-type') || '';
+    let senderName = '';
+    let tableNumber = '';
+    let note = '';
+    let mediaType = 'photo';
+    let fileName = '';
+    let hasConsent = false;
+    let buffer: Buffer;
+    let mimeType = 'image/jpeg';
 
-    // 1. Consent verification (Zorunlu açık rıza)
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      const file = formData.get('file') as File | null;
+
+      if (!file) {
+        return NextResponse.json({ error: 'Dosya seçilmedi.' }, { status: 400 });
+      }
+
+      senderName = (formData.get('senderName') as string) || '';
+      tableNumber = (formData.get('tableNumber') as string) || '';
+      note = (formData.get('note') as string) || '';
+      mediaType = (formData.get('mediaType') as string) || (file.type.startsWith('video/') ? 'video' : 'photo');
+      fileName = file.name || 'dosya';
+      hasConsent = formData.get('hasConsent') === 'true';
+
+      const arrayBuffer = await file.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+      mimeType = file.type || (mediaType === 'video' ? 'video/mp4' : 'image/jpeg');
+    } else {
+      const body = await req.json();
+      senderName = body.senderName || '';
+      tableNumber = body.tableNumber || '';
+      note = body.note || '';
+      mediaType = body.mediaType || 'photo';
+      fileName = body.fileName || '';
+      hasConsent = Boolean(body.hasConsent);
+
+      if (!body.base64Data) {
+        return NextResponse.json({ error: 'Yüklenecek medya verisi bulunamadı.' }, { status: 400 });
+      }
+
+      const matches = body.base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (matches && matches.length === 3) {
+        mimeType = matches[1];
+        buffer = Buffer.from(matches[2], 'base64');
+      } else {
+        buffer = Buffer.from(body.base64Data, 'base64');
+      }
+    }
+
     if (!hasConsent) {
       return NextResponse.json(
         { error: 'Yükleme izni ve açık rıza onaylanmalıdır.' },
@@ -42,28 +81,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!base64Data) {
-      return NextResponse.json(
-        { error: 'Yüklenecek medya verisi bulunamadı.' },
-        { status: 400 }
-      );
-    }
-
-    // 2. Decode base64
-    const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-    let buffer: Buffer;
-    let contentType = mediaType === 'video' ? 'video/mp4' : 'image/jpeg';
-
-    if (matches && matches.length === 3) {
-      contentType = matches[1];
-      buffer = Buffer.from(matches[2], 'base64');
-    } else {
-      buffer = Buffer.from(base64Data, 'base64');
-    }
-
-    // 3. Prepare Cloudflare R2 Key
-    const isVideo = mediaType === 'video' || (fileName && fileName.match(/\.(mp4|mov|webm)$/i));
-    const ext = isVideo ? 'mp4' : 'jpg';
+    // Prepare Cloudflare R2 Key
+    const isVideo = mediaType === 'video' || fileName.match(/\.(mp4|mov|webm)$/i);
+    const ext = isVideo ? 'mp4' : (mimeType.includes('png') ? 'png' : 'jpg');
     const timestamp = Date.now();
     const sanitizedSender = (senderName || 'davetli')
       .replace(/[^a-zA-Z0-9]/g, '_')
@@ -74,13 +94,13 @@ export async function POST(req: NextRequest) {
     const bucketName = process.env.R2_BUCKET_NAME || 'buse-berkay-anilar';
     const r2Client = getR2Client();
 
-    // 4. PutObject to Cloudflare R2
+    // Upload to R2
     await r2Client.send(
       new PutObjectCommand({
         Bucket: bucketName,
         Key: r2Key,
         Body: buffer,
-        ContentType: contentType,
+        ContentType: mimeType,
         Metadata: {
           sender: encodeURIComponent(senderName || 'İsimsiz'),
           table: encodeURIComponent(tableNumber || ''),
@@ -90,19 +110,10 @@ export async function POST(req: NextRequest) {
       })
     );
 
-    // 5. Construct public URL if custom domain is provided
-    let publicUrl = '';
-    if (process.env.NEXT_PUBLIC_R2_PUBLIC_URL) {
-      const base = process.env.NEXT_PUBLIC_R2_PUBLIC_URL.replace(/\/+$/, '');
-      publicUrl = `${base}/${r2Key}`;
-    }
-
-    // 6. Return minimal success response (Tek yönlü drop-box: dosya listesini dönme)
     return NextResponse.json({
       success: true,
       message: 'Fotoğrafınız Buse & Berkay\'a başarıyla iletildi ❤️',
       r2Key,
-      publicUrl: publicUrl || undefined,
     });
   } catch (error: any) {
     console.error('R2 Upload error:', error);

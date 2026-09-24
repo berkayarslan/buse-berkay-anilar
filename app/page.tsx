@@ -13,7 +13,7 @@ import {
   FileVideo,
   ArrowRight,
   AlertCircle,
-  Plus
+  Plus,
 } from 'lucide-react';
 
 interface QueuedFile {
@@ -24,6 +24,72 @@ interface QueuedFile {
   sizeFormatted: string;
 }
 
+// Client-side image optimizer: Resizes huge mobile photos (e.g. 8MB 48MP) to crisp 2560px JPEG (~1MB)
+// Ensures blazing fast uploads on mobile networks and avoids server payload size limits
+async function optimizeImageForUpload(file: File): Promise<File> {
+  if (!file.type.startsWith('image/')) {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const maxDim = 2560; // 2.5K crisp resolution (ideal for high-end wedding album prints)
+      let { width, height } = img;
+
+      // If already small enough, keep as-is
+      if (width <= maxDim && height <= maxDim && file.size < 2 * 1024 * 1024) {
+        resolve(file);
+        return;
+      }
+
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            resolve(file);
+            return;
+          }
+          const cleanName = file.name.replace(/\.[^.]+$/, '.jpg');
+          const optimizedFile = new File([blob], cleanName, {
+            type: 'image/jpeg',
+            lastModified: Date.now(),
+          });
+          resolve(optimizedFile);
+        },
+        'image/jpeg',
+        0.88 // 88% high-fidelity JPEG compression
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(file);
+    };
+    img.src = url;
+  });
+}
+
 export default function GuestUploadPage() {
   const [senderName, setSenderName] = useState('');
   const [tableNumber, setTableNumber] = useState('');
@@ -32,6 +98,7 @@ export default function GuestUploadPage() {
   const [queuedFiles, setQueuedFiles] = useState<QueuedFile[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [statusMessage, setStatusMessage] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -61,7 +128,7 @@ export default function GuestUploadPage() {
         setErrorMessage(`"${file.name}" çok büyük. Lütfen 80MB altı dosyalar seçiniz.`);
         return;
       }
-      const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|webm)$/i);
+      const isVideo = file.type.startsWith('video/') || Boolean(file.name.match(/\.(mp4|mov|webm)$/i));
       newQueued.push({
         file,
         previewUrl: URL.createObjectURL(file),
@@ -82,15 +149,6 @@ export default function GuestUploadPage() {
     });
   };
 
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(file);
-    });
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -106,35 +164,83 @@ export default function GuestUploadPage() {
     }
 
     setIsSubmitting(true);
-    setUploadProgress(10);
+    setUploadProgress(5);
+    setStatusMessage('Yükleme başlatılıyor...');
 
     try {
       const total = queuedFiles.length;
+
       for (let i = 0; i < total; i++) {
         const item = queuedFiles[i];
-        const base64Data = await fileToBase64(item.file);
+        setStatusMessage(`Dosya ${i + 1}/${total} hazırlanıyor...`);
 
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            senderName: senderName.trim(),
-            tableNumber: tableNumber.trim() || undefined,
-            note: note.trim() || undefined,
-            mediaType: item.type,
-            base64Data,
-            fileName: item.name,
-            hasConsent: true,
-          }),
-        });
+        // 1. Client-side optimize (reduces 8MB raw JPEG to ~1MB crisp JPEG)
+        const fileToUpload = await optimizeImageForUpload(item.file);
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || 'Yükleme başarısız');
+        let uploadSuccess = false;
+
+        // 2. Try pre-signed URL direct PUT to R2 (bypasses Vercel limits completely)
+        try {
+          const presignRes = await fetch('/api/upload/presign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: fileToUpload.name,
+              fileType: fileToUpload.type,
+              senderName: senderName.trim(),
+              tableNumber: tableNumber.trim() || undefined,
+              note: note.trim() || undefined,
+            }),
+          });
+
+          if (presignRes.ok) {
+            const { presignedUrl } = await presignRes.json();
+            if (presignedUrl) {
+              setStatusMessage(`Dosya ${i + 1}/${total} R2'ye aktarılıyor...`);
+              const putRes = await fetch(presignedUrl, {
+                method: 'PUT',
+                body: fileToUpload,
+                headers: {
+                  'Content-Type': fileToUpload.type || 'image/jpeg',
+                },
+              });
+
+              if (putRes.ok) {
+                uploadSuccess = true;
+              }
+            }
+          }
+        } catch {
+          // If direct pre-signed fails (e.g. CORS block before R2 rule configured), fall back to FormData endpoint
         }
 
-        setUploadProgress(Math.round(((i + 1) / total) * 100));
+        // 3. Fallback: Fast multipart/form-data upload to /api/upload
+        if (!uploadSuccess) {
+          setStatusMessage(`Dosya ${i + 1}/${total} yükleniyor...`);
+          const formData = new FormData();
+          formData.append('file', fileToUpload);
+          formData.append('senderName', senderName.trim());
+          if (tableNumber.trim()) formData.append('tableNumber', tableNumber.trim());
+          if (note.trim()) formData.append('note', note.trim());
+          formData.append('mediaType', item.type);
+          formData.append('hasConsent', 'true');
+
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.error || `Dosya ${i + 1} (${item.name}) yüklenemedi.`);
+          }
+        }
+
+        const percent = Math.round(((i + 1) / total) * 100);
+        setUploadProgress(percent);
       }
+
+      setStatusMessage('Tamamlandı! 🎉');
 
       confetti({
         particleCount: 80,
@@ -148,10 +254,12 @@ export default function GuestUploadPage() {
       setQueuedFiles([]);
       setNote('');
     } catch (err: any) {
-      setErrorMessage(err.message || 'Yükleme sırasında hata oluştu.');
+      console.error('Upload error:', err);
+      setErrorMessage(err.message || 'Yükleme sırasında bir hata oluştu. Lütfen tekrar deneyiniz.');
     } finally {
       setIsSubmitting(false);
       setUploadProgress(0);
+      setStatusMessage('');
     }
   };
 
@@ -353,7 +461,7 @@ export default function GuestUploadPage() {
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold text-stone-700">
                 <span>Yüklenecek Dosyalar ({queuedFiles.length})</span>
-                <span className="text-[11px] text-stone-400">Tek yönlü gönderim</span>
+                <span className="text-[11px] text-emerald-600 font-medium">Otomatik yüksek kalite optimizasyonu aktif</span>
               </div>
 
               <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
@@ -379,8 +487,9 @@ export default function GuestUploadPage() {
 
                     <button
                       type="button"
+                      disabled={isSubmitting}
                       onClick={() => removeQueuedFile(idx)}
-                      className="p-1 rounded-lg hover:bg-stone-200 text-stone-400 hover:text-stone-700 cursor-pointer"
+                      className="p-1 rounded-lg hover:bg-stone-200 text-stone-400 hover:text-stone-700 cursor-pointer disabled:opacity-40"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -410,7 +519,9 @@ export default function GuestUploadPage() {
               {isSubmitting ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Yükleniyor... ({uploadProgress}%)</span>
+                  <span>
+                    {statusMessage || `Yükleniyor... (${uploadProgress}%)`}
+                  </span>
                 </>
               ) : (
                 <>
