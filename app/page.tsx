@@ -15,6 +15,7 @@ import {
   AlertCircle,
   Plus,
   Info,
+  Video,
 } from 'lucide-react';
 
 interface QueuedFile {
@@ -104,178 +105,38 @@ async function optimizeImageForUpload(file: File): Promise<File> {
   });
 }
 
-// Video Optimizer:
-// Phone cameras (e.g. iPhone 16 Pro Max 4K 60fps) record at 60-100 Mbps, making even a 30s video 300MB!
-// This compressor downscales resolution to 720p HD (1280x720 / 720x1280) and transcodes at 2.2 Mbps bitrate.
-// Compresses a 300MB video down to ~8MB - 18MB (over 90% savings!) in seconds,
-// saving mobile data and keeping Cloudflare R2 storage costs near zero.
-async function compressVideoForUpload(
+// Upload file directly to Cloudflare R2 Pre-Signed URL with real-time byte progress
+function uploadToPresignedUrl(
+  presignedUrl: string,
   file: File,
-  onProgress?: (progressText: string) => void
-): Promise<File> {
-  // If video is already small (< 12MB), no need to re-encode
-  if (file.size <= 12 * 1024 * 1024) {
-    return file;
-  }
+  contentType: string,
+  onProgress: (percent: number, loaded: number, total: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', presignedUrl, true);
+    xhr.setRequestHeader('Content-Type', contentType);
 
-  // Verify browser support for MediaRecorder & Canvas
-  if (
-    typeof window === 'undefined' ||
-    typeof MediaRecorder === 'undefined' ||
-    typeof document === 'undefined'
-  ) {
-    return file;
-  }
-
-  return new Promise((resolve) => {
-    let finished = false;
-    const safeResolve = (f: File) => {
-      if (!finished) {
-        finished = true;
-        resolve(f);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        onProgress(percent, e.loaded, e.total);
       }
     };
 
-    // 35s safety timeout: if device is slow or codec unsupported, proceed with original file
-    const timeoutId = setTimeout(() => {
-      safeResolve(file);
-    }, 35000);
-
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.muted = true;
-    video.playsInline = true;
-    const objectUrl = URL.createObjectURL(file);
-    video.src = objectUrl;
-
-    video.onloadedmetadata = async () => {
-      try {
-        const duration = video.duration;
-        // If duration is unknown or too long (> 150s), use original to avoid mobile lag
-        if (!duration || isNaN(duration) || duration <= 0 || duration > 150) {
-          clearTimeout(timeoutId);
-          URL.revokeObjectURL(objectUrl);
-          safeResolve(file);
-          return;
-        }
-
-        // Downscale to 720p HD (1280 max dimension)
-        const maxDim = 1280;
-        let width = video.videoWidth || 1280;
-        let height = video.videoHeight || 720;
-
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-
-        // Must be even dimensions
-        width = width % 2 === 0 ? width : width - 1;
-        height = height % 2 === 0 ? height : height - 1;
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          clearTimeout(timeoutId);
-          URL.revokeObjectURL(objectUrl);
-          safeResolve(file);
-          return;
-        }
-
-        // Detect supported codec
-        let mimeType = 'video/webm';
-        if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1.42E01E,mp4a.40.2')) {
-          mimeType = 'video/mp4;codecs=avc1.42E01E,mp4a.40.2';
-        } else if (MediaRecorder.isTypeSupported('video/mp4')) {
-          mimeType = 'video/mp4';
-        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
-          mimeType = 'video/webm;codecs=vp8';
-        } else if (MediaRecorder.isTypeSupported('video/webm')) {
-          mimeType = 'video/webm';
-        }
-
-        const stream = canvas.captureStream ? canvas.captureStream(30) : null;
-        if (!stream) {
-          clearTimeout(timeoutId);
-          URL.revokeObjectURL(objectUrl);
-          safeResolve(file);
-          return;
-        }
-
-        // Re-encode at 2.2 Mbps (2,200,000 bps) -> crisp HD quality & compact size
-        const recorder = new MediaRecorder(stream, {
-          mimeType,
-          videoBitsPerSecond: 2_200_000,
-        });
-
-        const chunks: Blob[] = [];
-        recorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) chunks.push(e.data);
-        };
-
-        recorder.onstop = () => {
-          clearTimeout(timeoutId);
-          URL.revokeObjectURL(objectUrl);
-          const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-          const cleanName = file.name.replace(/\.[^.]+$/, `_hd.${ext}`);
-          const compressedBlob = new Blob(chunks, { type: mimeType });
-
-          // If compression reduced size, use it!
-          if (compressedBlob.size > 10000 && compressedBlob.size < file.size) {
-            const compressedFile = new File([compressedBlob], cleanName, {
-              type: mimeType,
-              lastModified: Date.now(),
-            });
-            safeResolve(compressedFile);
-          } else {
-            safeResolve(file);
-          }
-        };
-
-        // Play at 2x rate to compress twice as fast
-        video.currentTime = 0;
-        video.playbackRate = 2.0;
-
-        let active = true;
-        const renderLoop = () => {
-          if (!active || video.paused || video.ended) return;
-          ctx.drawImage(video, 0, 0, width, height);
-          if (onProgress && duration > 0) {
-            const pct = Math.min(99, Math.round((video.currentTime / duration) * 100));
-            onProgress(`Video optimize ediliyor... (%${pct})`);
-          }
-          requestAnimationFrame(renderLoop);
-        };
-
-        recorder.start(100);
-        await video.play();
-        renderLoop();
-
-        video.onended = () => {
-          active = false;
-          if (recorder.state === 'recording') {
-            recorder.stop();
-          }
-        };
-      } catch {
-        clearTimeout(timeoutId);
-        URL.revokeObjectURL(objectUrl);
-        safeResolve(file);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`R2 yükleme hatası (HTTP ${xhr.status})`));
       }
     };
 
-    video.onerror = () => {
-      clearTimeout(timeoutId);
-      URL.revokeObjectURL(objectUrl);
-      safeResolve(file);
+    xhr.onerror = () => {
+      reject(new Error('Cloudflare R2 bağlantısı kurulamadı.'));
     };
+
+    xhr.send(file);
   });
 }
 
@@ -292,6 +153,7 @@ export default function GuestUploadPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
   const handleFilesSelected = (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -299,14 +161,14 @@ export default function GuestUploadPage() {
 
     const newQueued: QueuedFile[] = [];
     Array.from(files).forEach((file) => {
-      const isVideo = file.type.startsWith('video/') || Boolean(file.name.match(/\.(mp4|mov|webm)$/i));
+      const isVideo = file.type.startsWith('video/') || Boolean(file.name.match(/\.(mp4|mov|webm|quicktime)$/i));
 
       // Limit Check:
-      // Photos: up to 100MB (iPhone 16 Pro RAW / 48MP supported, optimized seamlessly on device)
-      // Videos: up to 350MB (300MB phone videos accepted and optimized to ~10-20MB)
-      if (isVideo && file.size > 350 * 1024 * 1024) {
+      // Photos: up to 100MB (iPhone 16 Pro RAW / 48MP supported, optimized seamlessly to ~1.2MB)
+      // Videos: up to 500MB (Preserves 100% natural 1.0x speed and original stereo sound, uploaded directly to Cloudflare R2)
+      if (isVideo && file.size > 500 * 1024 * 1024) {
         setErrorMessage(
-          `"${file.name}" video boyutu çok yüksek (${formatFileSize(file.size)}). Videolar maksimum 350 MB olabilir.`
+          `"${file.name}" video boyutu çok yüksek (${formatFileSize(file.size)}). Videolar maksimum 500 MB olabilir.`
         );
         return;
       }
@@ -361,30 +223,30 @@ export default function GuestUploadPage() {
       for (let i = 0; i < total; i++) {
         const item = queuedFiles[i];
         let fileToUpload = item.file;
+        let mimeType = item.file.type;
 
-        // 1. Optimize Photos or Videos
+        // 1. Optimize Photos (Ultra-HD 2.5K canvas compression)
+        // For videos: We preserve 100% original speed (1.0x) and crystal-clear stereo audio,
+        // uploading directly to Cloudflare R2 without any artificial speedup or mute.
         if (item.type === 'photo') {
           setStatusMessage(`Fotoğraf optimize ediliyor (4K Ultra-HD)... (${i + 1}/${total})`);
           fileToUpload = await optimizeImageForUpload(item.file);
-        } else if (item.type === 'video') {
-          if (item.file.size > 12 * 1024 * 1024) {
-            setStatusMessage(`Video optimize ediliyor (${formatFileSize(item.file.size)} ➔ HD)... (${i + 1}/${total})`);
-            fileToUpload = await compressVideoForUpload(item.file, (progressText) => {
-              setStatusMessage(`${progressText} (${i + 1}/${total})`);
-            });
-          }
+          mimeType = fileToUpload.type || 'image/jpeg';
+        } else {
+          mimeType = fileToUpload.type || 'video/mp4';
+          setStatusMessage(`Video R2'ye aktarılıyor (${formatFileSize(fileToUpload.size)})... (${i + 1}/${total})`);
         }
 
         let uploadSuccess = false;
 
-        // 2. Direct Pre-Signed URL PUT to Cloudflare R2 (handles any file size directly)
+        // 2. Direct Pre-Signed URL PUT to Cloudflare R2 (supports up to 500MB directly)
         try {
           const presignRes = await fetch('/api/upload/presign', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               fileName: fileToUpload.name,
-              fileType: fileToUpload.type,
+              fileType: mimeType,
               senderName: senderName.trim(),
               note: note.trim() || undefined,
             }),
@@ -393,22 +255,24 @@ export default function GuestUploadPage() {
           if (presignRes.ok) {
             const { presignedUrl } = await presignRes.json();
             if (presignedUrl) {
-              setStatusMessage(`Dosya ${i + 1}/${total} R2'ye aktarılıyor (${formatFileSize(fileToUpload.size)})...`);
-              const putRes = await fetch(presignedUrl, {
-                method: 'PUT',
-                body: fileToUpload,
-                headers: {
-                  'Content-Type': fileToUpload.type || 'application/octet-stream',
-                },
-              });
-
-              if (putRes.ok) {
-                uploadSuccess = true;
-              }
+              await uploadToPresignedUrl(
+                presignedUrl,
+                fileToUpload,
+                mimeType,
+                (percent, loaded, totalBytes) => {
+                  const loadedMb = (loaded / (1024 * 1024)).toFixed(1);
+                  const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
+                  setStatusMessage(
+                    `Dosya ${i + 1}/${total}: ${loadedMb} MB / ${totalMb} MB (%${percent}) aktarılıyor...`
+                  );
+                  setUploadProgress(percent);
+                }
+              );
+              uploadSuccess = true;
             }
           }
-        } catch {
-          // Fallback to server endpoint if direct presign fails
+        } catch (presignErr) {
+          console.warn('Presigned upload failed, attempting fallback...', presignErr);
         }
 
         // 3. Fallback: Multipart/form-data upload to /api/upload
@@ -432,8 +296,8 @@ export default function GuestUploadPage() {
           }
         }
 
-        const percent = Math.round(((i + 1) / total) * 100);
-        setUploadProgress(percent);
+        const overallPercent = Math.round(((i + 1) / total) * 100);
+        setUploadProgress(overallPercent);
       }
 
       setStatusMessage('Tamamlandı! 🎉');
@@ -461,6 +325,7 @@ export default function GuestUploadPage() {
 
   return (
     <main className="max-w-xl mx-auto px-4 py-8 sm:py-12">
+      {/* Gallery file picker */}
       <input
         ref={fileInputRef}
         type="file"
@@ -469,10 +334,20 @@ export default function GuestUploadPage() {
         className="hidden"
         onChange={(e) => handleFilesSelected(e.target.files)}
       />
+      {/* Camera photo picker */}
       <input
         ref={cameraInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => handleFilesSelected(e.target.files)}
+      />
+      {/* Video recorder */}
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept="video/*"
         capture="environment"
         className="hidden"
         onChange={(e) => handleFilesSelected(e.target.files)}
@@ -526,9 +401,9 @@ export default function GuestUploadPage() {
           <div className="bg-stone-50 border border-stone-200/80 rounded-2xl p-4 text-left flex items-start gap-3 text-xs text-stone-600">
             <ShieldCheck className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-semibold text-stone-800">Gizlilik Güvencesi</p>
+              <p className="font-semibold text-stone-800">Doğal Hız & Net Ses Garantisi</p>
               <p className="text-stone-500 mt-0.5 leading-relaxed">
-                Yüklediğiniz içerikler tek yönlü olarak çiftin arşivine kaydedilmiştir. Güvenliğiniz için diğer davetliler tarafından görüntülenemez veya silinemez.
+                Videolarınız hızlandırılmadan, 1.0x doğal oynatma hızında ve tüm ses detaylarıyla orijinal kalitesinde saklanır.
               </p>
             </div>
           </div>
@@ -609,40 +484,52 @@ export default function GuestUploadPage() {
               </label>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={() => cameraInputRef.current?.click()}
-                className="py-4 px-3 rounded-2xl border-2 border-dashed border-rose-300 hover:border-rose-500 bg-rose-50/50 hover:bg-rose-50 transition-all flex flex-col items-center justify-center gap-1.5 text-rose-700 cursor-pointer group active:scale-[0.98]"
+                className="py-3.5 px-2 rounded-2xl border-2 border-dashed border-rose-300 hover:border-rose-500 bg-rose-50/50 hover:bg-rose-50 transition-all flex flex-col items-center justify-center gap-1 text-rose-700 cursor-pointer group active:scale-[0.98]"
               >
-                <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center group-hover:scale-110 transition-transform">
-                  <Camera className="w-5 h-5 text-rose-600" />
+                <div className="w-9 h-9 rounded-full bg-rose-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Camera className="w-4 h-4 text-rose-600" />
                 </div>
-                <span className="text-xs font-bold">Kamera ile Çek</span>
-                <span className="text-[10px] text-stone-500">Fotoğraf & Video</span>
+                <span className="text-[11px] font-bold">Fotoğraf Çek</span>
+                <span className="text-[9px] text-stone-400">Kamera</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => videoInputRef.current?.click()}
+                className="py-3.5 px-2 rounded-2xl border-2 border-dashed border-rose-300 hover:border-rose-500 bg-rose-50/50 hover:bg-rose-50 transition-all flex flex-col items-center justify-center gap-1 text-rose-700 cursor-pointer group active:scale-[0.98]"
+              >
+                <div className="w-9 h-9 rounded-full bg-rose-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Video className="w-4 h-4 text-rose-600" />
+                </div>
+                <span className="text-[11px] font-bold">Video Kaydet</span>
+                <span className="text-[9px] text-stone-400">Canlı Ses & HD</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="py-4 px-3 rounded-2xl border-2 border-dashed border-stone-300 hover:border-stone-500 bg-stone-50 hover:bg-stone-100 transition-all flex flex-col items-center justify-center gap-1.5 text-stone-700 cursor-pointer group active:scale-[0.98]"
+                className="py-3.5 px-2 rounded-2xl border-2 border-dashed border-stone-300 hover:border-stone-500 bg-stone-50 hover:bg-stone-100 transition-all flex flex-col items-center justify-center gap-1 text-stone-700 cursor-pointer group active:scale-[0.98]"
               >
-                <div className="w-10 h-10 rounded-full bg-stone-200 flex items-center justify-center group-hover:scale-110 transition-transform">
-                  <Upload className="w-5 h-5 text-stone-700" />
+                <div className="w-9 h-9 rounded-full bg-stone-200 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Upload className="w-4 h-4 text-stone-700" />
                 </div>
-                <span className="text-xs font-bold">Galeriden Seç</span>
-                <span className="text-[10px] text-stone-500">Çoklu Dosya</span>
+                <span className="text-[11px] font-bold">Galeriden Seç</span>
+                <span className="text-[9px] text-stone-400">500 MB'a Kadar</span>
               </button>
             </div>
 
-            {/* Dosya Boyutu ve Kalite Bilgilendirme Kartı */}
+            {/* Bilgilendirme Kartı */}
             <div className="p-3 bg-stone-50 rounded-2xl border border-stone-200/80 flex items-start gap-2 text-[11px] text-stone-600 leading-relaxed">
               <Info className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold text-stone-800">Akıllı Optimizasyon & Limitler:</span>
+                <span className="font-semibold text-stone-800">Kalite & Hız Güvencesi:</span>
                 <div className="mt-1 space-y-0.5 text-stone-600">
                   <p>• <strong>Fotoğraflar:</strong> 100 MB'a kadar (iPhone 48MP yüksek netlik korunarak optimize edilir).</p>
-                  <p>• <strong>Videolar:</strong> 350 MB'a kadar (Telefonunuzdaki 300 MB'lık videolar otomatik olarak HD kalitede optimize edilip hızlıca yüklenir).</p>
+                  <p>• <strong>Videolar:</strong> 500 MB'a kadar (300 MB'lık 4K videolar <strong>1.0x doğal hızında ve kristal netlikte sesle</strong> doğrudan R2 arşivine aktarılır).</p>
                 </div>
               </div>
             </div>
@@ -653,7 +540,7 @@ export default function GuestUploadPage() {
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold text-stone-700">
                 <span>Yüklenecek Dosyalar ({queuedFiles.length})</span>
-                <span className="text-[11px] text-emerald-600 font-medium">Akıllı Optimizasyon Aktif</span>
+                <span className="text-[11px] text-emerald-600 font-medium">Doğal Hız & Net Ses</span>
               </div>
 
               <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
@@ -673,7 +560,7 @@ export default function GuestUploadPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-stone-800 truncate">{file.name}</p>
                       <p className="text-[10px] text-stone-400">
-                        {file.type === 'video' ? 'Video' : 'Fotoğraf (Ultra-HD)'} • {file.sizeFormatted}
+                        {file.type === 'video' ? 'Video (1.0x Orijinal Ses)' : 'Fotoğraf (Ultra-HD)'} • {file.sizeFormatted}
                       </p>
                     </div>
 
@@ -698,6 +585,22 @@ export default function GuestUploadPage() {
             </div>
           )}
 
+          {/* Progress Bar when uploading */}
+          {isSubmitting && (
+            <div className="space-y-1.5 p-3 rounded-xl bg-rose-50 border border-rose-200">
+              <div className="flex justify-between text-[11px] font-semibold text-rose-800">
+                <span className="truncate">{statusMessage}</span>
+                <span>%{uploadProgress}</span>
+              </div>
+              <div className="w-full h-2 bg-rose-200/60 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-rose-600 rounded-full transition-all duration-200"
+                  style={{ width: `${Math.max(5, uploadProgress)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="pt-2">
             <button
               type="submit"
@@ -711,9 +614,7 @@ export default function GuestUploadPage() {
               {isSubmitting ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>
-                    {statusMessage || `Yükleniyor... (${uploadProgress}%)`}
-                  </span>
+                  <span>Yükleniyor...</span>
                 </>
               ) : (
                 <>

@@ -28,25 +28,30 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { fileName, fileType, senderName, tableNumber, note } = body;
 
-    const isVideo = fileType?.startsWith('video/') || fileName?.match(/\.(mp4|mov|webm)$/i);
-    const ext = isVideo ? 'mp4' : (fileType?.includes('png') ? 'png' : 'jpg');
+    const isVideo = fileType?.startsWith('video/') || fileName?.match(/\.(mp4|mov|webm|quicktime)$/i);
+    let ext = 'jpg';
+    if (isVideo) {
+      ext = fileName?.match(/\.mov$/i) ? 'mov' : (fileName?.match(/\.webm$/i) ? 'webm' : 'mp4');
+    } else if (fileType?.includes('png') || fileName?.match(/\.png$/i)) {
+      ext = 'png';
+    }
     const timestamp = Date.now();
     const sanitizedSender = (senderName || 'davetli')
       .replace(/[^a-zA-Z0-9]/g, '_')
       .toLowerCase();
-    const tablePrefix = tableNumber ? `masa_${tableNumber}` : 'genel';
-    const r2Key = `anilar/${tablePrefix}_${sanitizedSender}_${timestamp}.${ext}`;
+    const r2Key = `anilar/${sanitizedSender}_${timestamp}.${ext}`;
 
     const bucketName = process.env.R2_BUCKET_NAME || 'buse-berkay-anilar';
     const r2Client = getR2Client();
 
+    const contentType = fileType || (isVideo ? 'video/mp4' : 'image/jpeg');
+
     const command = new PutObjectCommand({
       Bucket: bucketName,
       Key: r2Key,
-      ContentType: fileType || 'image/jpeg',
+      ContentType: contentType,
       Metadata: {
         sender: encodeURIComponent(senderName || 'İsimsiz'),
-        table: encodeURIComponent(tableNumber || ''),
         note: encodeURIComponent(note || ''),
         uploadedat: new Date().toISOString(),
       },
