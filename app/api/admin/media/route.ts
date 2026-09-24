@@ -78,7 +78,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// DELETE: Delete an item from R2
+// DELETE: Delete single item, multiple selected items, or all items from R2
 export async function DELETE(req: NextRequest) {
   try {
     const pin = req.headers.get('x-admin-pin');
@@ -88,23 +88,87 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'Yetkisiz işlem' }, { status: 401 });
     }
 
-    const { key } = await req.json();
-    if (!key) {
-      return NextResponse.json({ error: 'Key eksik' }, { status: 400 });
-    }
-
+    const body = await req.json().catch(() => ({}));
+    const { key, keys, all } = body;
     const bucketName = process.env.R2_BUCKET_NAME || 'buse-berkay-anilar';
     const r2Client = getR2Client();
 
-    await r2Client.send(
-      new DeleteObjectCommand({
-        Bucket: bucketName,
-        Key: key,
-      })
-    );
+    // 1. TÜMÜNÜ SİL
+    if (all === true) {
+      const listRes = await r2Client.send(
+        new ListObjectsV2Command({
+          Bucket: bucketName,
+          Prefix: 'anilar/',
+        })
+      );
 
-    return NextResponse.json({ success: true, key });
+      const allKeys = (listRes.Contents || [])
+        .map((o) => o.Key)
+        .filter((k): k is string => Boolean(k));
+
+      // 10'ar gruplar halinde sil
+      const chunkSize = 10;
+      for (let i = 0; i < allKeys.length; i += chunkSize) {
+        const chunk = allKeys.slice(i, i + chunkSize);
+        await Promise.all(
+          chunk.map((k) =>
+            r2Client.send(
+              new DeleteObjectCommand({
+                Bucket: bucketName,
+                Key: k,
+              })
+            )
+          )
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        deletedCount: allKeys.length,
+        message: 'Tüm anılar Cloudflare R2 arşivinden silindi.',
+      });
+    }
+
+    // 2. SEÇEREK TOPLU SİLME
+    if (Array.isArray(keys) && keys.length > 0) {
+      const validKeys = keys.filter((k) => typeof k === 'string' && k.length > 0);
+      const chunkSize = 10;
+      for (let i = 0; i < validKeys.length; i += chunkSize) {
+        const chunk = validKeys.slice(i, i + chunkSize);
+        await Promise.all(
+          chunk.map((k) =>
+            r2Client.send(
+              new DeleteObjectCommand({
+                Bucket: bucketName,
+                Key: k,
+              })
+            )
+          )
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        deletedCount: validKeys.length,
+        keys: validKeys,
+        message: `${validKeys.length} adet dosya başarıyla silindi.`,
+      });
+    }
+
+    // 3. TEKLİ SİLME
+    if (key) {
+      await r2Client.send(
+        new DeleteObjectCommand({
+          Bucket: bucketName,
+          Key: key,
+        })
+      );
+      return NextResponse.json({ success: true, key });
+    }
+
+    return NextResponse.json({ error: 'Silinecek dosya (key veya keys) belirtilmedi.' }, { status: 400 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('Delete error in R2:', err);
+    return NextResponse.json({ error: err.message || 'Silme işlemi sırasında hata oluştu' }, { status: 500 });
   }
 }

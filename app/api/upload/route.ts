@@ -20,6 +20,33 @@ function getR2Client() {
   });
 }
 
+function sanitizeSenderName(name?: string): string {
+  if (!name || !name.trim()) return 'davetli';
+  const turkishMap: Record<string, string> = {
+    'ç': 'c', 'Ç': 'c', 'ğ': 'g', 'Ğ': 'g', 'ı': 'i', 'İ': 'i',
+    'ö': 'o', 'Ö': 'o', 'ş': 's', 'Ş': 's', 'ü': 'u', 'Ü': 'u',
+  };
+  let clean = name.trim();
+  for (const [key, val] of Object.entries(turkishMap)) {
+    clean = clean.split(key).join(val);
+  }
+  clean = clean
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  return clean || 'davetli';
+}
+
+function generate5CharId(): string {
+  const chars = '23456789abcdefghjkmnpqrstuvwxyz';
+  let out = '';
+  for (let i = 0; i < 5; i++) {
+    out += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return out;
+}
+
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
@@ -84,12 +111,9 @@ export async function POST(req: NextRequest) {
     // Prepare Cloudflare R2 Key
     const isVideo = mediaType === 'video' || fileName.match(/\.(mp4|mov|webm)$/i);
     const ext = isVideo ? 'mp4' : (mimeType.includes('png') ? 'png' : 'jpg');
-    const timestamp = Date.now();
-    const sanitizedSender = (senderName || 'davetli')
-      .replace(/[^a-zA-Z0-9]/g, '_')
-      .toLowerCase();
-    const tablePrefix = tableNumber ? `masa_${tableNumber}` : 'genel';
-    const r2Key = `anilar/${tablePrefix}_${sanitizedSender}_${timestamp}.${ext}`;
+    const sanitizedSender = sanitizeSenderName(senderName);
+    const shortId = generate5CharId();
+    const r2Key = `anilar/${sanitizedSender}_${shortId}.${ext}`;
 
     const bucketName = process.env.R2_BUCKET_NAME || 'buse-berkay-anilar';
     const r2Client = getR2Client();

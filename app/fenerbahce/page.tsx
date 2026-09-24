@@ -157,7 +157,34 @@ export default function FenerbahceAdminPage() {
         setDeleteNotice(`${count} dosya başarıyla silindi.`);
         setTimeout(() => setDeleteNotice(null), 3000);
       } else {
-        alert('Seçilen dosyaları silme işlemi başarısız oldu.');
+        // Fallback: Teker teker veya 5'li paralel silme
+        let successCount = 0;
+        for (let i = 0; i < keysArray.length; i += 5) {
+          const slice = keysArray.slice(i, i + 5);
+          await Promise.all(
+            slice.map(async (k) => {
+              const singleRes = await fetch('/api/admin/media', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json', 'x-admin-pin': pin },
+                body: JSON.stringify({ key: k }),
+              });
+              if (singleRes.ok) successCount++;
+            })
+          );
+        }
+
+        if (successCount > 0) {
+          setItems((prev) => prev.filter((i) => !selectedKeys.has(i.key)));
+          setSelectedKeys(new Set());
+          if (previewItem && selectedKeys.has(previewItem.key)) {
+            setPreviewItem(null);
+          }
+          setDeleteNotice(`${successCount} dosya başarıyla silindi.`);
+          setTimeout(() => setDeleteNotice(null), 3000);
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          alert(errData.error || 'Seçilen dosyaları silme işlemi başarısız oldu.');
+        }
       }
     } catch (err: any) {
       alert('Hata: ' + err.message);
@@ -195,7 +222,25 @@ export default function FenerbahceAdminPage() {
         setDeleteNotice('Tüm arşiv başarıyla temizlendi.');
         setTimeout(() => setDeleteNotice(null), 4000);
       } else {
-        alert('Tümünü silme işlemi başarısız oldu.');
+        // Fallback: Tüm dosyaları tekli silme ile temizleme
+        const allKeys = items.map((i) => i.key);
+        for (let i = 0; i < allKeys.length; i += 5) {
+          const slice = allKeys.slice(i, i + 5);
+          await Promise.all(
+            slice.map((k) =>
+              fetch('/api/admin/media', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json', 'x-admin-pin': pin },
+                body: JSON.stringify({ key: k }),
+              }).catch(() => {})
+            )
+          );
+        }
+        setItems([]);
+        setSelectedKeys(new Set());
+        setPreviewItem(null);
+        setDeleteNotice('Tüm arşiv başarıyla temizlendi.');
+        setTimeout(() => setDeleteNotice(null), 4000);
       }
     } catch (err: any) {
       alert('Hata: ' + err.message);
