@@ -26,39 +26,36 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { fileName, fileType, senderName, tableNumber, note } = body;
+    const { fileName, fileType, senderName } = body;
 
-    const isVideo = fileType?.startsWith('video/') || fileName?.match(/\.(mp4|mov|webm|quicktime)$/i);
+    const isVideo = fileType?.startsWith('video/') || fileName?.match(/\.(mp4|mov|webm|quicktime|m4v)$/i);
     let ext = 'jpg';
     if (isVideo) {
       ext = fileName?.match(/\.mov$/i) ? 'mov' : (fileName?.match(/\.webm$/i) ? 'webm' : 'mp4');
     } else if (fileType?.includes('png') || fileName?.match(/\.png$/i)) {
       ext = 'png';
     }
+
     const timestamp = Date.now();
     const sanitizedSender = (senderName || 'davetli')
       .replace(/[^a-zA-Z0-9]/g, '_')
       .toLowerCase();
-    const r2Key = `anilar/${sanitizedSender}_${timestamp}.${ext}`;
 
+    const r2Key = `anilar/${sanitizedSender}_${timestamp}.${ext}`;
     const bucketName = process.env.R2_BUCKET_NAME || 'buse-berkay-anilar';
     const r2Client = getR2Client();
 
-    const contentType = fileType || (isVideo ? 'video/mp4' : 'image/jpeg');
-
+    // Critical: Do NOT include Metadata or ContentType in PutObjectCommand for pre-signing.
+    // When Metadata is included, AWS S3 presigner calculates signature with SignedHeaders including
+    // custom headers (x-amz-meta-*), which triggers 403 SignatureDoesNotMatch in browser uploads.
+    // By keeping it clean, only 'host' is signed, allowing browser PUT requests to succeed seamlessly.
     const command = new PutObjectCommand({
       Bucket: bucketName,
       Key: r2Key,
-      ContentType: contentType,
-      Metadata: {
-        sender: encodeURIComponent(senderName || 'İsimsiz'),
-        note: encodeURIComponent(note || ''),
-        uploadedat: new Date().toISOString(),
-      },
     });
 
-    // 15 minutes pre-signed PUT url
-    const presignedUrl = await getSignedUrl(r2Client, command, { expiresIn: 900 });
+    // 1 hour pre-signed PUT url
+    const presignedUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
 
     return NextResponse.json({
       success: true,
