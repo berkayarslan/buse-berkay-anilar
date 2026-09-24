@@ -15,6 +15,7 @@ import {
   AlertCircle,
   Plus,
   Video,
+  Info,
 } from 'lucide-react';
 
 interface QueuedFile {
@@ -522,6 +523,24 @@ export default function GuestUploadPage() {
                 <span className="text-[11px] font-bold">Galeriden Seç</span>
                 <span className="text-[9px] text-stone-400">Tüm Medya</span>
               </button>
+            </div>
+
+            {/* Ufak Uyarı & Maksimum Boyut Kutucukları */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 px-0.5">
+              <div className="flex items-center gap-1 text-[11px] text-stone-400">
+                <Info className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                <span>Maksimum dosya boyutları:</span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-stone-50 border border-stone-200/80 text-[10px] text-stone-600 shadow-2xs">
+                  <Camera className="w-3 h-3 text-rose-500" />
+                  <span>Fotoğraf: <strong className="text-stone-800 font-semibold">100 MB</strong></span>
+                </div>
+                <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-stone-50 border border-stone-200/80 text-[10px] text-stone-600 shadow-2xs">
+                  <Video className="w-3 h-3 text-indigo-500" />
+                  <span>Video: <strong className="text-stone-800 font-semibold">500 MB</strong></span>
+                </div>
+              </div>
             </div>
           </div>
 
