@@ -385,7 +385,7 @@ export default function GuestUploadPage() {
       <div className="text-center space-y-3 mb-8">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 text-rose-700 text-xs font-semibold tracking-wide border border-rose-200/60 shadow-xs">
           <Sparkles className="w-3.5 h-3.5 text-rose-500" />
-          <span>Düğün Anı Albümü</span>
+          <span>Anı Albümü</span>
         </div>
 
         <h1 className="font-serif-luxury text-3xl sm:text-4xl text-stone-900 tracking-tight font-bold">
