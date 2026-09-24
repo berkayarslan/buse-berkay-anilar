@@ -432,7 +432,7 @@ export default function GuestUploadPage() {
           className="bg-white rounded-3xl p-5 sm:p-7 shadow-xl shadow-rose-100/50 border border-stone-200/70 space-y-6"
         >
           {/* 1. Consent */}
-          <div className="bg-rose-50/70 border border-rose-200/80 rounded-2xl p-4 space-y-2">
+          <div className="bg-rose-50/70 border border-rose-200/80 rounded-2xl p-4">
             <label className="flex items-start gap-3 cursor-pointer">
               <input
                 type="checkbox"
@@ -448,10 +448,6 @@ export default function GuestUploadPage() {
                 <span className="text-rose-600 font-bold ml-1">* (Zorunlu)</span>
               </span>
             </label>
-            <div className="flex items-center gap-1.5 text-[11px] text-stone-500 pl-7">
-              <ShieldCheck className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span>Yalnızca Buse & Berkay'ın Cloudflare R2 arşivine aktarılır.</span>
-            </div>
           </div>
 
           {/* 2. Guest Info (Ad Soyad) */}
@@ -621,14 +617,8 @@ export default function GuestUploadPage() {
         </form>
       )}
 
-      {/* Discreet Admin Footer */}
-      <footer className="mt-8 text-center space-y-1 pb-4">
-        <a
-          href="/admin"
-          className="text-[11px] text-stone-400 hover:text-stone-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
-        >
-          <span>🔐 Buse & Berkay Girişi</span>
-        </a>
+      {/* Minimal Footer */}
+      <footer className="mt-8 text-center pb-4">
         <p className="text-[10px] text-stone-400">
           Tüm hakları saklıdır © Buse & Berkay Düğün Anı Kutusu
         </p>
