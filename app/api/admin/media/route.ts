@@ -25,7 +25,7 @@ function getR2Client() {
 export async function GET(req: NextRequest) {
   try {
     const pin = req.headers.get('x-admin-pin');
-    const validPin = process.env.ADMIN_PIN || '1810';
+    const validPin = process.env.ADMIN_PIN || '9601';
 
     if (pin !== validPin) {
       return NextResponse.json({ error: 'Yetkisiz erişim' }, { status: 401 });
@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const pin = req.headers.get('x-admin-pin');
-    const validPin = process.env.ADMIN_PIN || '1810';
+    const validPin = process.env.ADMIN_PIN || '9601';
 
     if (pin !== validPin) {
       return NextResponse.json({ error: 'Yetkisiz işlem' }, { status: 401 });

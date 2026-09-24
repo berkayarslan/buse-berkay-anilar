@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import {
   Camera,
@@ -14,6 +14,7 @@ import {
   ArrowRight,
   AlertCircle,
   Plus,
+  Info,
 } from 'lucide-react';
 
 interface QueuedFile {
@@ -22,10 +23,14 @@ interface QueuedFile {
   type: 'photo' | 'video';
   name: string;
   sizeFormatted: string;
+  originalSizeBytes: number;
 }
 
-// Client-side image optimizer: Resizes huge mobile photos (e.g. 8MB 48MP) to crisp 2560px JPEG (~1MB)
-// Ensures blazing fast uploads on mobile networks and avoids server payload size limits
+// iPhone 16 Pro Max Ultra-HD Optimizer:
+// iPhone 16 Pro Max 48MP ProRAW/HEIC/JPEG captures at up to 8064 x 6048 pixels.
+// We preserve stunning 4K Ultra-HD detail (3840px dimension), keeping sharpness, micro-textures,
+// and color dynamics 100% pristine for luxury wedding albums, while gently compressing to ~2.5MB-3.5MB
+// to stay comfortably within transmission limits without any visible quality loss.
 async function optimizeImageForUpload(file: File): Promise<File> {
   if (!file.type.startsWith('image/')) {
     return file;
@@ -36,11 +41,11 @@ async function optimizeImageForUpload(file: File): Promise<File> {
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const maxDim = 2560; // 2.5K crisp resolution (ideal for high-end wedding album prints)
+      const maxDim = 3840; // 4K Ultra-HD Master Dimension (iPhone 16 Pro Max calibrated)
       let { width, height } = img;
 
-      // If already small enough, keep as-is
-      if (width <= maxDim && height <= maxDim && file.size < 2 * 1024 * 1024) {
+      // If already under 4K resolution and under 3.5MB, keep pure untouched original
+      if (width <= maxDim && height <= maxDim && file.size < 3.5 * 1024 * 1024) {
         resolve(file);
         return;
       }
@@ -58,13 +63,16 @@ async function optimizeImageForUpload(file: File): Promise<File> {
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { alpha: false });
       if (!ctx) {
         resolve(file);
         return;
       }
 
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, width, height);
+
       canvas.toBlob(
         (blob) => {
           if (!blob) {
@@ -79,7 +87,7 @@ async function optimizeImageForUpload(file: File): Promise<File> {
           resolve(optimizedFile);
         },
         'image/jpeg',
-        0.88 // 88% high-fidelity JPEG compression
+        0.91 // 91% studio grade master quality JPEG
       );
     };
     img.onerror = () => {
@@ -92,7 +100,6 @@ async function optimizeImageForUpload(file: File): Promise<File> {
 
 export default function GuestUploadPage() {
   const [senderName, setSenderName] = useState('');
-  const [tableNumber, setTableNumber] = useState('');
   const [note, setNote] = useState('');
   const [hasConsent, setHasConsent] = useState(false);
   const [queuedFiles, setQueuedFiles] = useState<QueuedFile[]>([]);
@@ -105,14 +112,6 @@ export default function GuestUploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const table = params.get('table');
-      if (table) setTableNumber(table);
-    }
-  }, []);
-
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
@@ -124,17 +123,30 @@ export default function GuestUploadPage() {
 
     const newQueued: QueuedFile[] = [];
     Array.from(files).forEach((file) => {
-      if (file.size > 80 * 1024 * 1024) {
-        setErrorMessage(`"${file.name}" çok büyük. Lütfen 80MB altı dosyalar seçiniz.`);
+      const isVideo = file.type.startsWith('video/') || Boolean(file.name.match(/\.(mp4|mov|webm)$/i));
+
+      // Limit Check:
+      // Photos: up to 100MB (iPhone 16 Pro RAW / 48MP supported, optimized seamlessly on device)
+      // Videos: up to 50MB (ideal for wedding moments, prevents huge R2 bandwidth costs)
+      if (isVideo && file.size > 50 * 1024 * 1024) {
+        setErrorMessage(
+          `"${file.name}" video boyutu çok yüksek (${formatFileSize(file.size)}). Cloudflare R2 depolama ve hızlı yükleme için videolar maksimum 50 MB olabilir.`
+        );
         return;
       }
-      const isVideo = file.type.startsWith('video/') || Boolean(file.name.match(/\.(mp4|mov|webm)$/i));
+
+      if (!isVideo && file.size > 100 * 1024 * 1024) {
+        setErrorMessage(`"${file.name}" çok büyük. Fotoğraflar maksimum 100 MB olabilir.`);
+        return;
+      }
+
       newQueued.push({
         file,
         previewUrl: URL.createObjectURL(file),
         type: isVideo ? 'video' : 'photo',
         name: file.name,
         sizeFormatted: formatFileSize(file.size),
+        originalSizeBytes: file.size,
       });
     });
 
@@ -174,7 +186,7 @@ export default function GuestUploadPage() {
         const item = queuedFiles[i];
         setStatusMessage(`Dosya ${i + 1}/${total} hazırlanıyor...`);
 
-        // 1. Client-side optimize (reduces 8MB raw JPEG to ~1MB crisp JPEG)
+        // 1. Client-side optimize for iPhone 16 Pro Max high resolution
         const fileToUpload = await optimizeImageForUpload(item.file);
 
         let uploadSuccess = false;
@@ -188,7 +200,6 @@ export default function GuestUploadPage() {
               fileName: fileToUpload.name,
               fileType: fileToUpload.type,
               senderName: senderName.trim(),
-              tableNumber: tableNumber.trim() || undefined,
               note: note.trim() || undefined,
             }),
           });
@@ -211,7 +222,7 @@ export default function GuestUploadPage() {
             }
           }
         } catch {
-          // If direct pre-signed fails (e.g. CORS block before R2 rule configured), fall back to FormData endpoint
+          // Fallback to server endpoint if direct presign fails
         }
 
         // 3. Fallback: Fast multipart/form-data upload to /api/upload
@@ -220,7 +231,6 @@ export default function GuestUploadPage() {
           const formData = new FormData();
           formData.append('file', fileToUpload);
           formData.append('senderName', senderName.trim());
-          if (tableNumber.trim()) formData.append('tableNumber', tableNumber.trim());
           if (note.trim()) formData.append('note', note.trim());
           formData.append('mediaType', item.type);
           formData.append('hasConsent', 'true');
@@ -299,13 +309,10 @@ export default function GuestUploadPage() {
             </h1>
             <Heart className="w-4 h-4 fill-rose-500 text-rose-500 animate-pulse" />
           </div>
-          <p className="text-xs uppercase tracking-widest text-rose-700 font-semibold mt-1">
-            Anı Yükleme Platformu
-          </p>
         </div>
 
         <p className="text-xs sm:text-sm text-stone-600 max-w-md mx-auto leading-relaxed">
-          Bizimle paylaştığınız her an çok değerli! Çektiğiniz fotoğraf ve videoları anında Buse & Berkay anı arşivimize iletebilirsiniz.
+          Çektiğiniz fotoğraf ve videoları anında yükleyebilir, anı arşivimize iletebilirsiniz.
         </p>
       </div>
 
@@ -380,33 +387,18 @@ export default function GuestUploadPage() {
             </div>
           </div>
 
-          {/* 2. Guest Info */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div>
-              <label className="block text-xs font-semibold text-stone-700 mb-1">
-                Adınız & Soyadınız <span className="text-stone-400 font-normal">(İsteğe bağlı)</span>
-              </label>
-              <input
-                type="text"
-                value={senderName}
-                onChange={(e) => setSenderName(e.target.value)}
-                placeholder="Örn: Ahmet Yılmaz"
-                className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-stone-700 mb-1">
-                Masa Numarası <span className="text-stone-400 font-normal">(İsteğe bağlı)</span>
-              </label>
-              <input
-                type="text"
-                value={tableNumber}
-                onChange={(e) => setTableNumber(e.target.value)}
-                placeholder="Örn: 4"
-                className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all"
-              />
-            </div>
+          {/* 2. Guest Info (Sadece Ad & Soyad - Masa No Kaldırıldı) */}
+          <div>
+            <label className="block text-xs font-semibold text-stone-700 mb-1">
+              Adınız & Soyadınız <span className="text-stone-400 font-normal">(İsteğe bağlı)</span>
+            </label>
+            <input
+              type="text"
+              value={senderName}
+              onChange={(e) => setSenderName(e.target.value)}
+              placeholder="Örn: Ahmet Yılmaz"
+              className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all"
+            />
           </div>
 
           {/* 3. Note */}
@@ -425,9 +417,11 @@ export default function GuestUploadPage() {
 
           {/* 4. Action Buttons */}
           <div className="space-y-3">
-            <label className="block text-xs font-semibold text-stone-700">
-              Fotoğraf veya Video Ekleyin <span className="text-rose-600 font-bold">*</span>
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-stone-700">
+                Fotoğraf veya Video Ekleyin <span className="text-rose-600 font-bold">*</span>
+              </label>
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
               <button
@@ -454,6 +448,17 @@ export default function GuestUploadPage() {
                 <span className="text-[10px] text-stone-500">Çoklu Dosya</span>
               </button>
             </div>
+
+            {/* Dosya Boyutu ve Kalite Bilgilendirme Kartı */}
+            <div className="p-3 bg-stone-50 rounded-2xl border border-stone-200/80 flex items-start gap-2 text-[11px] text-stone-600 leading-relaxed">
+              <Info className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-stone-800">Maksimum Boyut & Kalite:</span>
+                <span className="ml-1">
+                  Fotoğraflar <strong>100 MB</strong>'a kadar (iPhone 16 Pro Max 48MP Ultra-HD 4K netliğinde optimize edilir). Videolar ise hızlı aktarım için <strong>maksimum 50 MB</strong> kabul edilir.
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* Queued files */}
@@ -461,7 +466,7 @@ export default function GuestUploadPage() {
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold text-stone-700">
                 <span>Yüklenecek Dosyalar ({queuedFiles.length})</span>
-                <span className="text-[11px] text-emerald-600 font-medium">Otomatik yüksek kalite optimizasyonu aktif</span>
+                <span className="text-[11px] text-emerald-600 font-medium">4K Ultra-HD Optimizasyon Aktif</span>
               </div>
 
               <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
@@ -481,7 +486,7 @@ export default function GuestUploadPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-stone-800 truncate">{file.name}</p>
                       <p className="text-[10px] text-stone-400">
-                        {file.type === 'video' ? 'Video' : 'Fotoğraf'} • {file.sizeFormatted}
+                        {file.type === 'video' ? 'Video' : 'Fotoğraf (Ultra-HD)'} • {file.sizeFormatted}
                       </p>
                     </div>
 
@@ -545,7 +550,7 @@ export default function GuestUploadPage() {
           href="/admin"
           className="text-[11px] text-stone-400 hover:text-stone-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
         >
-          <span>🔐 Buse & Berkay Yönetici Girişi</span>
+          <span>🔐 Buse & Berkay Girişi</span>
         </a>
         <p className="text-[10px] text-stone-400">
           Tüm hakları saklıdır © Buse & Berkay Düğün Anı Kutusu

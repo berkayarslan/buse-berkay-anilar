@@ -1,5 +1,3 @@
-'use client';
-
 import React, { useState } from 'react';
 import JSZip from 'jszip';
 import { Lock, Download, Trash2, ArrowLeft, RefreshCw, HardDrive, Film, Image as ImageIcon } from 'lucide-react';
@@ -57,7 +55,7 @@ export default function AdminPage() {
       if (res.ok) {
         setItems((prev) => prev.filter((i) => i.key !== key));
       }
-    } catch (err) {
+    } catch {
       alert('Silinemedi.');
     }
   };
@@ -111,21 +109,22 @@ export default function AdminPage() {
             <Lock className="w-6 h-6" />
           </div>
           <h1 className="font-serif-luxury text-xl font-bold text-stone-900">Buse & Berkay Arşiv Girişi</h1>
-          <p className="text-xs text-stone-500">Cloudflare R2 anılarını görüntülemek için PIN giriniz.</p>
+          <p className="text-xs text-stone-500">Cloudflare R2 anılarını görüntülemek için PIN kodunuzu giriniz.</p>
 
           <form onSubmit={handleLogin} className="space-y-3">
             <input
               type="password"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
-              placeholder="PIN Kodu (Varsayılan: 1810)"
-              className="w-full text-center py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-rose-500"
+              placeholder="••••"
+              maxLength={12}
+              className="w-full text-center py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-base font-bold tracking-widest focus:ring-2 focus:ring-rose-500"
             />
             {error && <p className="text-xs text-red-600">{error}</p>}
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold"
+              className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold cursor-pointer"
             >
               {loading ? 'Giriş Yapılıyor...' : 'Giriş Yap'}
             </button>
@@ -155,7 +154,7 @@ export default function AdminPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => fetchItems(pin)}
-            className="p-2 bg-stone-100 hover:bg-stone-200 rounded-xl text-xs font-semibold flex items-center gap-1"
+            className="p-2 bg-stone-100 hover:bg-stone-200 rounded-xl text-xs font-semibold flex items-center gap-1 cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span>Yenile</span>
@@ -164,55 +163,69 @@ export default function AdminPage() {
           <button
             onClick={handleDownloadAllZip}
             disabled={isZipping || items.length === 0}
-            className="px-3.5 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
           >
-            <Download className="w-3.5 h-3.5 text-amber-300" />
-            <span>{isZipping ? `İndiriliyor (${zipProgress}%)` : 'Tümünü ZIP İndir'}</span>
+            <Download className="w-3.5 h-3.5" />
+            <span>{isZipping ? `İndiriliyor (%${zipProgress})` : 'Tümünü İndir (.ZIP)'}</span>
           </button>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto p-6">
         {items.length === 0 ? (
-          <div className="bg-white rounded-3xl p-12 text-center border border-dashed border-stone-300">
-            <HardDrive className="w-12 h-12 text-stone-400 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-stone-700">R2 Bucket'ında henüz dosya yok.</p>
-            <p className="text-xs text-stone-500 mt-1">Davetliler yükledikçe burada listelenecektir.</p>
+          <div className="text-center py-20 bg-white rounded-3xl border border-stone-200 p-8">
+            <HardDrive className="w-12 h-12 text-stone-300 mx-auto mb-3" />
+            <h3 className="font-bold text-stone-800">Henüz Anı Yüklenmedi</h3>
+            <p className="text-xs text-stone-500 mt-1">
+              Davetliler fotoğraf ve video yükledikçe burada listelenecektir.
+            </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {items.map((item, idx) => (
-              <div key={idx} className="bg-white rounded-2xl border border-stone-200 overflow-hidden flex flex-col group">
-                <div className="aspect-square bg-stone-100 overflow-hidden relative">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {items.map((item) => (
+              <div
+                key={item.key}
+                className="group relative bg-white rounded-2xl overflow-hidden border border-stone-200 shadow-sm flex flex-col"
+              >
+                <div className="aspect-square bg-stone-100 relative overflow-hidden flex items-center justify-center">
                   {item.type === 'video' ? (
-                    <video src={item.url} controls className="w-full h-full object-cover" />
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-stone-900 text-white p-2 text-center">
+                      <Film className="w-8 h-8 text-rose-400 mb-1" />
+                      <span className="text-[10px] text-stone-300">Video</span>
+                    </div>
                   ) : (
-                    <img src={item.url} alt="Media" className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                    <img
+                      src={item.url}
+                      alt="Anı"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      loading="lazy"
+                    />
                   )}
-                </div>
 
-                <div className="p-2.5 flex items-center justify-between text-xs border-t border-stone-100">
-                  <span className="text-[10px] text-stone-500 font-mono truncate max-w-[100px]">
-                    {item.key.replace(/^anilar\//, '')}
-                  </span>
-
-                  <div className="flex items-center gap-1">
+                  <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <a
                       href={item.url}
                       download
                       target="_blank"
                       rel="noreferrer"
-                      className="p-1 hover:bg-stone-100 rounded text-stone-600"
+                      className="p-1.5 bg-white/90 hover:bg-white text-stone-800 rounded-lg shadow-sm"
                     >
                       <Download className="w-3.5 h-3.5" />
                     </a>
                     <button
                       onClick={() => handleDelete(item.key)}
-                      className="p-1 hover:bg-red-50 text-stone-400 hover:text-red-600 rounded"
+                      className="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-sm cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
+                </div>
+
+                <div className="p-2.5 flex items-center justify-between text-[11px] text-stone-500 border-t border-stone-100">
+                  <span className="truncate max-w-[120px] font-medium text-stone-700">
+                    {item.key.replace(/^anilar\//, '')}
+                  </span>
+                  <span>{(item.size / (1024 * 1024)).toFixed(1)} MB</span>
                 </div>
               </div>
             ))}
