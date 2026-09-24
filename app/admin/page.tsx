@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState } from 'react';
 import JSZip from 'jszip';
 import { Lock, Download, Trash2, ArrowLeft, RefreshCw, HardDrive, Film, Image as ImageIcon } from 'lucide-react';
