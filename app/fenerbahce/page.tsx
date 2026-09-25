@@ -17,6 +17,7 @@ import {
   Square,
   AlertTriangle,
   FileCheck,
+  MessageSquare,
 } from 'lucide-react';
 
 interface R2MediaItem {
@@ -25,6 +26,49 @@ interface R2MediaItem {
   lastModified: string;
   url: string;
   type: 'photo' | 'video';
+  senderName?: string;
+  note?: string;
+  shortId?: string;
+}
+
+function getItemDetails(item: R2MediaItem) {
+  if (item.note) {
+    return { senderName: item.senderName, note: item.note };
+  }
+  const cleanKey = item.key.replace(/^anilar\//, '');
+  const lastDot = cleanKey.lastIndexOf('.');
+  const base = lastDot !== -1 ? cleanKey.slice(0, lastDot) : cleanKey;
+  const parts = base.split('_');
+
+  let shortIdIndex = -1;
+  for (let i = 1; i < parts.length; i++) {
+    if (parts[i].length === 5 && /\d/.test(parts[i])) {
+      shortIdIndex = i;
+      break;
+    }
+  }
+  if (shortIdIndex === -1) {
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].length === 5) {
+        shortIdIndex = i;
+        break;
+      }
+    }
+  }
+
+  if (shortIdIndex !== -1) {
+    const rawSender = parts.slice(0, shortIdIndex).join(' ');
+    const rawNote = parts.slice(shortIdIndex + 1).join(' ').trim();
+    return {
+      senderName: item.senderName || (rawSender ? rawSender.charAt(0).toUpperCase() + rawSender.slice(1) : undefined),
+      note: rawNote || undefined,
+    };
+  }
+
+  return {
+    senderName: item.senderName,
+    note: undefined,
+  };
 }
 
 function formatFileSize(bytes: number): string {
@@ -520,6 +564,7 @@ export default function FenerbahceAdminPage() {
             {items.map((item) => {
               const isSelected = selectedKeys.has(item.key);
               const fileName = item.key.replace(/^anilar\//, '');
+              const details = getItemDetails(item);
 
               return (
                 <div
@@ -593,11 +638,30 @@ export default function FenerbahceAdminPage() {
                   </div>
 
                   {/* Meta Details */}
-                  <div className="p-3 bg-white space-y-1">
+                  <div className="p-3 bg-white space-y-1.5">
                     <p className="text-[11px] font-semibold text-stone-800 truncate" title={fileName}>
                       {fileName}
                     </p>
-                    <div className="flex items-center justify-between text-[10px] text-stone-400">
+
+                    {/* Sender Name if available */}
+                    {details.senderName && details.senderName.toLowerCase() !== 'davetli' && (
+                      <p className="text-[10px] text-stone-600 font-medium truncate flex items-center gap-1">
+                        <span className="text-rose-500">👤</span>
+                        <span>{details.senderName}</span>
+                      </p>
+                    )}
+
+                    {/* Guest Note / Açıklama */}
+                    {details.note && (
+                      <div className="p-2 rounded-xl bg-rose-50/90 border border-rose-200/70 text-[11px] text-rose-900 flex items-start gap-1.5 shadow-2xs">
+                        <MessageSquare className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                        <p className="line-clamp-2 italic font-medium leading-tight">
+                          "{details.note}"
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between text-[10px] text-stone-400 pt-0.5">
                       <span>{formatFileSize(item.size)}</span>
                       <span>
                         {item.lastModified
@@ -662,23 +726,57 @@ export default function FenerbahceAdminPage() {
             </div>
 
             {/* Media Content */}
-            <div className="relative max-w-full max-h-[80vh] flex items-center justify-center rounded-2xl overflow-hidden bg-stone-950">
+            <div className="relative max-w-full max-h-[75vh] flex items-center justify-center rounded-2xl overflow-hidden bg-stone-950">
               {previewItem.type === 'video' ? (
                 <video
                   src={previewItem.url}
                   controls
                   autoPlay
                   playsInline
-                  className="max-w-full max-h-[80vh] rounded-xl"
+                  className="max-w-full max-h-[75vh] rounded-xl"
                 />
               ) : (
                 <img
                   src={previewItem.url}
                   alt="Büyük Görünüm"
-                  className="max-w-full max-h-[80vh] object-contain rounded-xl"
+                  className="max-w-full max-h-[75vh] object-contain rounded-xl"
                 />
               )}
             </div>
+
+            {/* Guest Note & Details Banner */}
+            {(() => {
+              const previewDetails = getItemDetails(previewItem);
+              if (!previewDetails.note && (!previewDetails.senderName || previewDetails.senderName.toLowerCase() === 'davetli')) {
+                return null;
+              }
+              return (
+                <div className="mt-3 w-full bg-stone-900/95 border border-stone-800 rounded-2xl p-3.5 text-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xl">
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                      <MessageSquare className="w-4 h-4" />
+                    </div>
+                    <div>
+                      {previewDetails.senderName && previewDetails.senderName.toLowerCase() !== 'davetli' && (
+                        <p className="text-xs font-semibold text-rose-300">
+                          {previewDetails.senderName}
+                        </p>
+                      )}
+                      {previewDetails.note ? (
+                        <p className="text-sm text-stone-100 italic mt-0.5">
+                          "{previewDetails.note}"
+                        </p>
+                      ) : (
+                        <p className="text-xs text-stone-400 italic">Açıklama belirtilmemiş</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right text-[11px] text-stone-400 shrink-0 self-end sm:self-center">
+                    {previewItem.lastModified ? new Date(previewItem.lastModified).toLocaleString('tr-TR') : ''}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

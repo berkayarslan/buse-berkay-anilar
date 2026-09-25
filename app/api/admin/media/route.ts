@@ -21,6 +21,55 @@ function getR2Client() {
   });
 }
 
+function parseMediaDetails(key: string): {
+  senderName: string;
+  note?: string;
+  shortId?: string;
+} {
+  const cleanKey = key.replace(/^anilar\//, '');
+  const lastDot = cleanKey.lastIndexOf('.');
+  const base = lastDot !== -1 ? cleanKey.slice(0, lastDot) : cleanKey;
+  const parts = base.split('_');
+
+  // Find shortId (a 5-char token, preferably with digit, index >= 1)
+  let shortIdIndex = -1;
+  for (let i = 1; i < parts.length; i++) {
+    if (parts[i].length === 5 && /\d/.test(parts[i])) {
+      shortIdIndex = i;
+      break;
+    }
+  }
+  if (shortIdIndex === -1) {
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].length === 5) {
+        shortIdIndex = i;
+        break;
+      }
+    }
+  }
+
+  if (shortIdIndex !== -1) {
+    const rawSender = parts.slice(0, shortIdIndex).join(' ');
+    const sender = rawSender
+      ? rawSender.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+      : 'Davetli';
+    const shortId = parts[shortIdIndex];
+    const rawNote = parts.slice(shortIdIndex + 1).join(' ').trim();
+    return {
+      senderName: sender,
+      shortId,
+      note: rawNote || undefined,
+    };
+  }
+
+  const rawSender = parts[0] || 'Davetli';
+  const rawNote = parts.slice(1).join(' ').trim();
+  return {
+    senderName: rawSender.charAt(0).toUpperCase() + rawSender.slice(1),
+    note: rawNote || undefined,
+  };
+}
+
 // GET: List all uploaded memories from Cloudflare R2
 export async function GET(req: NextRequest) {
   try {
@@ -58,6 +107,7 @@ export async function GET(req: NextRequest) {
         }
 
         const isVideo = obj.Key?.match(/\.(mp4|mov|webm)$/i);
+        const details = parseMediaDetails(obj.Key || '');
 
         return {
           key: obj.Key,
@@ -65,6 +115,9 @@ export async function GET(req: NextRequest) {
           lastModified: obj.LastModified,
           url: downloadUrl,
           type: isVideo ? 'video' : 'photo',
+          senderName: details.senderName,
+          note: details.note,
+          shortId: details.shortId,
         };
       })
     );

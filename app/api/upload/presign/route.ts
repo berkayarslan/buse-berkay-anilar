@@ -39,12 +39,34 @@ function sanitizeSenderName(name?: string): string {
   return clean || 'davetli';
 }
 
+function sanitizeNoteForFilename(note?: string): string {
+  if (!note || !note.trim()) return '';
+  const turkishMap: Record<string, string> = {
+    'ç': 'c', 'Ç': 'c', 'ğ': 'g', 'Ğ': 'g', 'ı': 'i', 'İ': 'i',
+    'ö': 'o', 'Ö': 'o', 'ş': 's', 'Ş': 's', 'ü': 'u', 'Ü': 'u',
+  };
+  let clean = note.trim();
+  for (const [key, val] of Object.entries(turkishMap)) {
+    clean = clean.split(key).join(val);
+  }
+  clean = clean
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  return clean.slice(0, 80);
+}
+
 function generate5CharId(): string {
   const chars = '23456789abcdefghjkmnpqrstuvwxyz';
+  const digits = '23456789';
   let out = '';
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 4; i++) {
     out += chars.charAt(Math.floor(Math.random() * chars.length));
   }
+  const digitPos = Math.floor(Math.random() * 5);
+  const randomDigit = digits.charAt(Math.floor(Math.random() * digits.length));
+  out = out.slice(0, digitPos) + randomDigit + out.slice(digitPos);
   return out;
 }
 
@@ -53,7 +75,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { fileName, fileType, senderName } = body;
+    const { fileName, fileType, senderName, note } = body;
 
     const isVideo = fileType?.startsWith('video/') || fileName?.match(/\.(mp4|mov|webm|quicktime|m4v)$/i);
     let ext = 'jpg';
@@ -65,7 +87,10 @@ export async function POST(req: NextRequest) {
 
     const sanitizedSender = sanitizeSenderName(senderName);
     const shortId = generate5CharId();
-    const r2Key = `anilar/${sanitizedSender}_${shortId}.${ext}`;
+    const sanitizedNote = sanitizeNoteForFilename(note);
+    const r2Key = sanitizedNote
+      ? `anilar/${sanitizedSender}_${shortId}_${sanitizedNote}.${ext}`
+      : `anilar/${sanitizedSender}_${shortId}.${ext}`;
     const bucketName = process.env.R2_BUCKET_NAME || 'buse-berkay-anilar';
     const r2Client = getR2Client();
 
